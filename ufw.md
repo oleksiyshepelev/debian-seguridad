@@ -1,6 +1,3 @@
-Aquí tienes los comandos básicos para gestionar las reglas de UFW (Uncomplicated Firewall) en Ubuntu/Debian:
-
----
 
 ## 1. Ver las reglas actuales
 
@@ -114,5 +111,3 @@ sudo ufw reload
   ```bash
   sudo ufw show raw
   ```
-
-Con estos pasos podrás **ver**, **añadir**, **eliminar** y **modificar** tus reglas de UFW de forma segura y ordenada.
