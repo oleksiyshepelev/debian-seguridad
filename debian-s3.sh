@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# debian-security-setup.sh v3.1
+# debian-security-setup.sh v3.2
 #   Secure configuration helper for Debian 12
 #   Licensed under MIT License
 
@@ -21,9 +21,9 @@ error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" | tee -a "$LOGFILE"; 
 mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
 
 # Generic menu
-show_menu() {
-  local title="$1"; shift
-  local opts=("${!1}") actions=("${!2}")
+display_menu() {
+  local title="$1" opts_ref="$2" act_ref="$3"
+  local opts=("${!opts_ref}") actions=("${!act_ref}")
   PS3="$title > "
   select opt in "${opts[@]}"; do
     [[ -n "$opt" ]] || { echo "Invalid option"; continue; }
@@ -49,7 +49,7 @@ create_backup() {
 restore_backup() {
   local choices=($(ls -1 "$BACKUP_DIR")) actions=()
   for c in "${choices[@]}"; do actions+=("confirm_restore '$c'"); done
-  show_menu "Select backup to restore" choices[@] actions[@]
+  display_menu "Select backup to restore" choices[@] actions[@]
 }
 confirm_restore() {
   local stamp="$1"
@@ -63,7 +63,8 @@ confirm_restore() {
   log "Restored backup $stamp"
 }
 
-# Install package if missing\install_pkg() {
+# Install package if missing
+install_pkg() {
   local pkg="$1"
   if ! dpkg -s "$pkg" &>/dev/null; then
     apt-get update && apt-get install -y "$pkg"
@@ -75,19 +76,16 @@ confirm_restore() {
 
 # Detect active network services and open ports
 scan_active_services() {
-  declare -A ports=()
+  declare -A ports
   while IFS= read -r line; do
-    # format: tcp   LISTEN 0      128    0.0.0.0:22      0.0.0.0:*    users:("sshd")
     proto=$(awk '{print $1}' <<<"$line")
     addr=$(awk '{print $5}' <<<"$line")
-    svc=$(awk -F '"' '{print $2}' <<<"$line")
+    svc=$(awk -F '"' '{print $2}' <<<"$line" )
     port=${addr##*:}
     ports["$port/$proto/$svc"]=1
   done < <(ss -tulpnH)
   DETECTED_PORTS=()
-  for key in "${!ports[@]}"; do
-    DETECTED_PORTS+=("$key")
-  done
+  for key in "${!ports[@]}"; do DETECTED_PORTS+=("$key"); done
 }
 
 # Configure UFW with interactive inclusion or exclusion of detected services
@@ -95,26 +93,22 @@ configure_ufw() {
   install_pkg ufw
   ufw default deny incoming
   ufw default allow outgoing
-  # Always allow SSH
   ufw allow ssh && log "Allowed SSH"
 
-  # Scan for active services
   scan_active_services
   if [[ ${#DETECTED_PORTS[@]} -gt 0 ]]; then
     echo "Detected active services and ports:"
-    PS3="Select action for %s: "
     for entry in "${DETECTED_PORTS[@]}"; do
       IFS='/' read -r port proto svc <<<"$entry"
       echo "- $svc on port $port/$proto"
+      PS3="Action for $svc ($port/$proto): "
       select choice in "Allow" "Deny"; do
         case $choice in
           Allow)
-            ufw allow "$port/$proto"
-            log "Allowed $svc ($port/$proto)"
+            ufw allow "$port/$proto" && log "Allowed $svc ($port/$proto)"
             break;;
           Deny)
-            ufw deny "$port/$proto"
-            log "Denied $svc ($port/$proto)"
+            ufw deny "$port/$proto" && log "Denied $svc ($port/$proto)"
             break;;
           *) echo "Invalid choice";;
         esac
@@ -124,11 +118,8 @@ configure_ufw() {
     echo "No active listening services detected."
   fi
 
-  # Detect common services
   for svc in http https; do
-    if command -v "$svc" &>/dev/null; then
-      ufw allow "$svc" && log "Allowed $svc"
-    fi
+    if command -v "$svc" &>/dev/null; then ufw allow "$svc" && log "Allowed $svc"; fi
   done
   ufw --force enable
   log "UFW configured"
@@ -170,8 +161,7 @@ if [[ $# -gt 0 ]]; then
       -r|--restore) restore_backup; shift;;
       -u|--ufw) configure_ufw; shift;;
       -f|--fail2ban) configure_fail2ban; shift;;
-      -a|--auto)
-        create_backup; configure_ufw; configure_fail2ban; shift;;
+      -a|--auto) create_backup; configure_ufw; configure_fail2ban; shift;;
       -h|--help) usage; exit 0;;
       *) error "Unknown option $1";;
     esac
@@ -182,4 +172,4 @@ fi
 # Interactive main menu
 options=("Backup configs" "Restore backup" "Configure UFW" "Configure Fail2Ban" "Auto-configure" "Exit")
 actions=("create_backup" "restore_backup" "configure_ufw" "configure_fail2ban" "create_backup; configure_ufw; configure_fail2ban" "exit 0")
-show_menu "Main Menu" options[@] actions[@]
+display_menu "Main Menu" options[@] actions[@]
