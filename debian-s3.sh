@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# debian-security-setup.sh v3.2
+# debian-security-setup.sh v3.3
 #   Secure configuration helper for Debian 12
 #   Licensed under MIT License
 
@@ -9,27 +9,23 @@ LOGFILE="/var/log/security_config.log"
 BACKUP_DIR="/root/security_backups"
 DATE_STAMP=$(date +"%Y%m%d_%H%M%S")
 
+# Color codes
+BLUE="\e[1;34m"
+GREEN="\e[1;32m"
+YELLOW="\e[1;33m"
+RED="\e[1;31m"
+NC="\e[0m"
+
 # Logging functions
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*" | tee -a "$LOGFILE"; }
-warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*" | tee -a "$LOGFILE"; }
-error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" | tee -a "$LOGFILE"; exit 1; }
+log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*" | tee -a "$LOGFILE"; }
+warn() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*" | tee -a "$LOGFILE"; }
+error() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" | tee -a "$LOGFILE"; exit 1; }
 
 # Ensure root
 [[ $EUID -eq 0 ]] || error "This script must be run as root."
 
 # Create backup dir
 mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
-
-# Generic menu
-display_menu() {
-  local title="$1" opts_ref="$2" act_ref="$3"
-  local opts=("${!opts_ref}") actions=("${!act_ref}")
-  PS3="$title > "
-  select opt in "${opts[@]}"; do
-    [[ -n "$opt" ]] || { echo "Invalid option"; continue; }
-    eval "${actions[$REPLY-1]}"; break
-  done
-}
 
 # Backup configs with checksum
 create_backup() {
@@ -47,9 +43,14 @@ create_backup() {
 
 # Restore backups
 restore_backup() {
-  local choices=($(ls -1 "$BACKUP_DIR")) actions=()
-  for c in "${choices[@]}"; do actions+=("confirm_restore '$c'"); done
-  display_menu "Select backup to restore" choices[@] actions[@]
+  local choices=($(ls -1 "$BACKUP_DIR"))
+  echo -e "${GREEN}Available backups:${NC}"
+  for idx in "${!choices[@]}"; do
+    printf "%2d) %s\n" $((idx+1)) "${choices[$idx]}"
+  done
+  read -rp "Select backup to restore: " sel
+  [[ "$sel" =~ ^[0-9]+$ ]] && sel=$((sel-1)) || { echo "Invalid"; return; }
+  confirm_restore "${choices[$sel]}"
 }
 confirm_restore() {
   local stamp="$1"
@@ -88,7 +89,7 @@ scan_active_services() {
   for key in "${!ports[@]}"; do DETECTED_PORTS+=("$key"); done
 }
 
-# Configure UFW with interactive inclusion or exclusion of detected services
+# Configure UFW with interactive inclusion/exclusion
 configure_ufw() {
   install_pkg ufw
   ufw default deny incoming
@@ -96,11 +97,11 @@ configure_ufw() {
   ufw allow ssh && log "Allowed SSH"
 
   scan_active_services
-  if [[ ${#DETECTED_PORTS[@]} -gt 0 ]]; then
-    echo "Detected active services and ports:"
+  if (( ${#DETECTED_PORTS[@]} )); then
+    echo -e "${YELLOW}Detected active services and ports:${NC}"
     for entry in "${DETECTED_PORTS[@]}"; do
       IFS='/' read -r port proto svc <<<"$entry"
-      echo "- $svc on port $port/$proto"
+      printf "- %s on %s/%s\n" "$svc" "$port" "$proto"
       PS3="Action for $svc ($port/$proto): "
       select choice in "Allow" "Deny"; do
         case $choice in
@@ -115,9 +116,8 @@ configure_ufw() {
       done
     done
   else
-    echo "No active listening services detected."
+    echo -e "${GREEN}No active listening services detected.${NC}"
   fi
-
   for svc in http https; do
     if command -v "$svc" &>/dev/null; then ufw allow "$svc" && log "Allowed $svc"; fi
   done
@@ -144,32 +144,45 @@ EOF
 usage() {
   cat <<-EOF
 Usage: $0 [options]
-  -b, --backup       Create configuration backup
-  -r, --restore      Restore from backup
-  -u, --ufw          Configure UFW interactively
+  -b, --backup       Backup configs
+  -r, --restore      Restore backup
+  -u, --ufw          Configure UFW
   -f, --fail2ban     Configure Fail2Ban
-  -a, --auto         Run full auto-configuration
-  -h, --help         Show this help
+  -a, --auto         Full auto-configuration
+  -h, --help         Help
 EOF
 }
 
 # Argument parsing
-if [[ $# -gt 0 ]]; then
-  while [[ $# -gt 0 ]]; do
+if (( $# )); then
+  while (( $# )); do
     case $1 in
-      -b|--backup) create_backup; shift;;
-      -r|--restore) restore_backup; shift;;
-      -u|--ufw) configure_ufw; shift;;
-      -f|--fail2ban) configure_fail2ban; shift;;
-      -a|--auto) create_backup; configure_ufw; configure_fail2ban; shift;;
+      -b|--backup) create_backup;;
+      -r|--restore) restore_backup;;
+      -u|--ufw) configure_ufw;;
+      -f|--fail2ban) configure_fail2ban;;
+      -a|--auto) create_backup; configure_ufw; configure_fail2ban;;
       -h|--help) usage; exit 0;;
       *) error "Unknown option $1";;
     esac
+    shift
   done
-  exit 0
+  exit
 fi
 
-# Interactive main menu
-options=("Backup configs" "Restore backup" "Configure UFW" "Configure Fail2Ban" "Auto-configure" "Exit")
-actions=("create_backup" "restore_backup" "configure_ufw" "configure_fail2ban" "create_backup; configure_ufw; configure_fail2ban" "exit 0")
-display_menu "Main Menu" options[@] actions[@]
+# Interactive Main Menu
+while :; do
+  echo ""
+  echo "1) Backup configs      3) Configure UFW      5) Auto-configure"
+  echo "2) Restore backup      4) Configure Fail2Ban 6) Exit"
+  read -rp "Main Menu > " choice
+  case $choice in
+    1) create_backup ;; 
+    2) restore_backup ;; 
+    3) configure_ufw ;; 
+    4) configure_fail2ban ;; 
+    5) create_backup; configure_ufw; configure_fail2ban ;; 
+    6) echo "Bye!"; exit 0 ;; 
+    *) echo "Invalid option" ;; 
+  esac
+done
