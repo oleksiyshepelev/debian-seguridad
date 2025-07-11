@@ -342,3 +342,7 @@ else
     print_warning "Problema detectado con el sistema de logging"
     print_warning "Verifica manualmente: tail -f /var/log/auth.log"
 fi
+
+if ! $RSYSLOG_INSTALLED && $JOURNALCTL_AVAILABLE; then
+    print_warning "Solo systemd-journald está activo. Considera configurar fail2ban para usar journald como backend y ajustar logpath."
+fi
